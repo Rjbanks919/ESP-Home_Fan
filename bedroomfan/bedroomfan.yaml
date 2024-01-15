@@ -1,0 +1,304 @@
+###############################################################################
+# ESP-Home Bedroom Fan
+# Author: Ryan Banks
+# License: MIT
+#
+# This .yaml file is to be used with ESP-Home and a ESP32 in order to create a
+# Home Assistant-controllable fan.
+#
+# The connected GPIO pins for my ESP32-Fan setup are as follows:
+#     - GPIO1:  Fan power button
+#     - GPIO2:  Fan oscillate button
+#     - GPIO3:  Fan speed relay 1
+#     - GPIO4:  Fan speed relay 2
+#     - GPIO5:  Fan speed relay 3
+#     - GPIO6:  Fan speed relay 4
+#     - GPIO7:  Fan oscillation relay
+#     - GPIO8:  Fan speed LED 1
+#     - GPIO9:  Fan speed LED 2
+#     - GPIO10: Fan speed LED 3
+#     - GPIO11: Fan speed LED 4
+#
+# The way this specific configuration operates is a little odd due to how the
+# fan is wired. Four relays control the speed of the fan, where only one can be
+# on at once.
+#
+# Additionally, there is a relay for controlling the oscillation of the fan.
+#
+# Note that there are LEDs defined in here, however they are left off as they
+# are quite annoying to look at.
+###############################################################################
+esphome:
+    name: bedroomfan
+
+    # The following options were determined for the ESP32-C3 after some
+    # in-depth googling.
+    platformio_options:
+        board_build.f_flash: 40000000L
+        board_build.flash_mode: dio
+        board_build.flash_size: 4MB
+
+esp32:
+    board: esp32-c3-devkitm-1 # My flavor of ESP32-C3
+    framework:
+        type: esp-idf
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+    password: "<PASSWORD_HERE>"
+
+# Enable Over-the-Air functionality
+ota:
+    password: "<PASSWORD_HERE>"
+
+# Substitutions within the file
+substitutions:
+    name: Bedroom Fan
+
+
+###############################################################################
+# Network Setup
+#
+# For my setup, I provide a static IP address along with the other network
+# parameters. There is also the option of a fallback hotspot connection.
+###############################################################################
+wifi:
+  manual_ip:
+    static_ip: <STATIC_IP_HERE>
+    gateway: <GATEWAY_HERE>
+    subnet: <SUBNET_HERE>
+  ssid: "<SSID_HERE>"
+  password: "<PASSWORD_HERE>"
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "<SSID_HERE>"
+    password: "<PASSWORD_HERE>"
+
+captive_portal:
+
+
+###############################################################################
+# Switch Setup
+#
+# For my setup, I define switches for everything that will be abstracted away.
+# This includes the fan speed relays and fan speed LEDs.
+#
+# Note that the fan speed relays have an interlock on them to prevent multiple
+# relays from turning on together.
+###############################################################################
+switch:
+    # Fan Speed Relay GPIO pins
+    - platform: gpio
+      internal: true
+      pin:
+          number: GPIO3
+      inverted: true
+      id: speed_relay_1
+      interlock: &relay_interlock_group [speed_relay_1, speed_relay_2, speed_relay_3, speed_relay_4]
+      interlock_wait_time: 300ms
+
+    - platform: gpio
+      internal: true
+      pin:
+          number: GPIO4
+      inverted: true
+      id: speed_relay_2
+      interlock: *relay_interlock_group
+      interlock_wait_time: 300ms
+
+    - platform: gpio
+      internal: true
+      pin:
+          number: GPIO5
+      inverted: true
+      id: speed_relay_3
+      interlock: *relay_interlock_group
+      interlock_wait_time: 300ms
+
+    - platform: gpio
+      internal: true
+      pin:
+          number: GPIO6
+      inverted: true
+      id: speed_relay_4
+      interlock: *relay_interlock_group
+      interlock_wait_time: 300ms
+
+    # Fan Speed LED GPIO pins, intentionally unused
+    - platform: gpio
+      internal: true
+      id: speed_led_1
+      pin:
+          number: GPIO8
+      interlock: &led_interlock_group [speed_led_1, speed_led_2, speed_led_3, speed_led_4]
+
+    - platform: gpio
+      internal: true
+      id: speed_led_2
+      pin:
+          number: GPIO9
+      interlock: *led_interlock_group
+
+    - platform: gpio
+      internal: true
+      id: speed_led_3
+      pin:
+          number: GPIO10
+      interlock: *led_interlock_group
+
+    - platform: gpio
+      internal: true
+      id: speed_led_4
+      pin:
+          number: GPIO11
+      interlock: *led_interlock_group
+
+
+###############################################################################
+# Output Setup
+#
+# For my setup, I define outputs for higher-level items. This includes the
+# oscillation relay output and fan speed output.
+#
+# The fan speed output is a bit interesting as it is the abstraction of the
+# prior fan speed relays. It has the logic to determine which relays are active
+# for each fan speed.
+###############################################################################
+output:
+    # Oscillation Relay Output
+    - platform: gpio
+      id: fan_osc_output
+      pin: GPIO7
+      inverted: true
+
+    # Fan Speed Relay Output
+    - platform: template
+      id: fan_speed_output
+      type: float
+      write_action:
+        - if:
+            condition:
+                lambda: return ((state == 0));
+            then:
+                # Action for turning off
+                - switch.turn_off: speed_relay_1
+                - switch.turn_off: speed_relay_2
+                - switch.turn_off: speed_relay_3
+                - switch.turn_off: speed_relay_4
+        - if:
+            condition:
+                lambda: return ((state > 0) && (state <= 0.25));
+            then:
+                # Action for speed 1
+                - switch.turn_off: speed_relay_2
+                - switch.turn_off: speed_relay_3
+                - switch.turn_off: speed_relay_4
+                - switch.turn_on: speed_relay_1
+        - if:
+            condition:
+                lambda: return ((state > 0.25) && (state <= 0.5));
+            then:
+                # Action for speed 2
+                - switch.turn_off: speed_relay_1
+                - switch.turn_off: speed_relay_3
+                - switch.turn_off: speed_relay_4
+                - switch.turn_on: speed_relay_2
+        - if:
+            condition:
+                lambda: return ((state > 0.5) && (state <= 0.75));
+            then:
+                # Action for speed 3
+                - switch.turn_off: speed_relay_1
+                - switch.turn_off: speed_relay_2
+                - switch.turn_off: speed_relay_4
+                - switch.turn_on: speed_relay_3
+        - if:
+            condition:
+                lambda: return ((state > 0.75));
+            then:
+                # Action for speed 4
+                - switch.turn_off: speed_relay_1
+                - switch.turn_off: speed_relay_2
+                - switch.turn_off: speed_relay_3
+                - switch.turn_on: speed_relay_4
+
+
+###############################################################################
+# Fan Setup
+#
+# The moment we've been waiting for, the main fan definition!
+#
+# This is fairly simple as all the heavy lifting has been done. We simply
+# provide the previously-configured speed and oscillation outputs, along with
+# our supported number of speed steps. Voila!
+###############################################################################
+fan:
+    - platform: speed
+      id: bedroom_fan
+      output: fan_speed_output              # Abstracted speed output
+      oscillation_output: fan_osc_output    # GPIO output
+      name: "${name}"
+      speed_count: 4
+
+
+###############################################################################
+# Binary Sensor Setup
+#
+# For my fan, there are two buttons I wired in. One is meant to cycle the speed
+# of the fan, whereas the other controls oscillation. Below is some funky
+# lambda junk to accomplish that!
+###############################################################################
+binary_sensor:
+    # Fan Power Button
+    - platform: gpio
+      id: power_button
+      pin:
+          number: GPIO1
+          mode: INPUT_PULLDOWN
+      on_press:
+          then:
+              # On button press, cycle the fan speed
+              - fan.cycle_speed:
+                  id: bedroom_fan
+                  off_speed_cycle: true
+
+    # Fan Oscillate Button
+    - platform: gpio
+      id: osc_button
+      pin:
+          number: GPIO2
+          mode: INPUT_PULLDOWN
+      on_press:
+          then:
+              # On button press, toggle oscillation if fan is on
+              - if:
+                  condition:
+                      fan.is_on: bedroom_fan
+                  then:
+                      if:
+                          condition:
+                              lambda: return id(bedroom_fan).oscillating;
+                          then:
+                              - fan.turn_on:
+                                  id: bedroom_fan
+                                  oscillating: false
+                          else:
+                              - fan.turn_on:
+                                  id: bedroom_fan
+                                  oscillating: true
+
+
+###############################################################################
+# Sensor Setup
+#
+# Nothing too interesting here, just gathering a bit more data on the device.
+###############################################################################
+sensor:
+    - platform: wifi_signal
+      name: "${name} WiFi Signal"
+      update_interval: 60s
+
